@@ -1,0 +1,119 @@
+# ============================================
+# 持续集成 (CI) 工作流
+# 触发条件: main分支的push和pull_request事件
+# 流程: rustfmt格式化检查 → clippy代码检查 → 测试 → 构建
+# ============================================
+name: CI
+
+# ============================================
+# 触发条件配置
+# - push: 代码推送到main分支时触发
+# - pull_request: 向main分支提交PR时触发
+# ============================================
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# ============================================
+# 全局环境变量
+# CARGO_TERM_COLOR: always - 始终显示彩色输出，便于日志查看
+# RUST_BACKTRACE: 1 - 启用Rust运行时错误详情回溯
+# ============================================
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+# ============================================
+# 作业定义
+# fmt → clippy → test → build (四个并行检查阶段)
+# ============================================
+jobs:
+  # ------------------------------------------
+  # 作业1: 格式化检查
+  # 目的: 确保代码符合rustfmt规范，保证代码风格统一
+  # 符合规则1: rustfmt自动格式化
+  # ------------------------------------------
+  fmt:
+    name: Rust Format
+    runs-on: ubuntu-latest
+    steps:
+      # 检出代码
+      - uses: actions/checkout@v4
+      # 安装Rust工具链，仅包含rustfmt组件
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      # 执行格式化检查，--check只检查不修改
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+  # ------------------------------------------
+  # 作业2: 代码质量检查
+  # 目的: 运行clippy检测代码潜在问题和不良模式
+  # 符合规则1: clippy零警告
+  # -D warnings: 将所有警告视为错误，确保代码质量
+  # ------------------------------------------
+  clippy:
+    name: Clippy Lints
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      # --workspace: 检查整个工作空间的所有crate
+      # --all-targets: 包括测试和示例代码
+      # --all-features: 启用所有feature flags
+      # -D warnings: clippy警告会导致构建失败
+      - name: Run Clippy
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+  # ------------------------------------------
+  # 作业3: 测试套件
+  # 目的: 运行所有单元测试和集成测试，验证代码正确性
+  # 符合规则8: 核心代码高覆盖率，提交前三检通过
+  # ------------------------------------------
+  test:
+    name: Test Suite
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      # 缓存cargo注册表，加速依赖下载
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/registry
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+      # 缓存cargo git索引
+      - name: Cache cargo index
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/git
+          key: ${{ runner.os }}-cargo-index-${{ hashFiles('**/Cargo.lock') }}
+      # 缓存编译产物target目录，大幅加速构建
+      - name: Cache target directory
+        uses: actions/cache@v4
+        with:
+          path: target
+          key: ${{ runner.os }}-target-${{ hashFiles('**/Cargo.lock') }}
+      # 运行所有测试
+      - name: Run tests
+        run: cargo test --workspace --all-features
+
+  # ------------------------------------------
+  # 作业4: Release构建检查
+  # 目的: 验证代码能够成功编译为release版本
+  # 符合规则7: 后端release构建
+  # ------------------------------------------
+  build:
+    name: Build Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      # 完整的release构建
+      - name: Build release
+        run: cargo build --release --workspace --all-features
