@@ -1,0 +1,43 @@
+# ============================================
+# Docker Compose 部署配置
+# 用于在Ubuntu服务器上部署本应用
+# ============================================
+version: '3.8'
+
+services:
+  # Rust CI/CD Demo 应用
+  app:
+    # 使用GitHub Container Registry的镜像
+    image: ${REGISTRY:-ghcr.io}/${IMAGE_NAME:-your-username/rust-ci-demo}:latest
+    
+    # 容器名称
+    container_name: rust-ci-demo
+    
+    # 自动重启策略
+    restart: always
+    
+    # 端口映射
+    ports:
+      - "8080:8080"
+    
+    # 环境变量
+    environment:
+      - RUST_LOG=info
+    
+    # 健康检查（可选，用于监控应用状态）
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8080/ || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+# ============================================
+# 使用说明：
+# 1. 在服务器上创建 .env 文件，设置:
+#    REGISTRY=ghcr.io
+#    IMAGE_NAME=your-username/rust-ci-demo
+# 2. 启动服务: docker-compose up -d
+# 3. 查看日志: docker-compose logs -f
+# 4. 更新服务: docker-compose pull && docker-compose up -d
+# ============================================

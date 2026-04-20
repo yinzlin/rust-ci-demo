@@ -98,29 +98,61 @@ jobs:
           cache-to: type=gha,mode=max
 
   # ------------------------------------------
-  # 作业2: 部署通知
-  # 目的: 镜像构建完成后，输出部署就绪信息
-  # 说明: 实际部署逻辑需根据具体基础设施配置
-  # 支持: docker-compose、kubernetes、Serverless等
+  # 作业2: 部署到Ubuntu服务器
+  # 目的: 自动化部署到远程服务器 39.96.223.65
+  # 说明: 使用SSH连接服务器，拉取新镜像并重启容器
   # 符合规则7: Docker+Nginx部署
   # ------------------------------------------
   deploy:
-    name: Deploy to Production
+    name: Deploy to Ubuntu Server
     runs-on: ubuntu-latest
     # 依赖build-and-push作业，必须镜像构建完成才能部署
     needs: build-and-push
     if: ${{ github.event.workflow_run.conclusion == 'success' }}
     steps:
-      # 输出部署就绪通知
-      # ::notice:: 是GitHub Actions的特殊语法，在日志中显示醒目标记
-      - name: Deploy notification
-        run: |
-          echo "::notice title=Deployment Ready::"
-          echo "Docker image pushed to: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}"
-          echo "Ready for deployment via docker-compose or k8s"
+      # 检出代码（获取部署脚本）
+      - uses: actions/checkout@v4
 
-      # 输出环境信息，便于追踪部署记录
-      - name: Environment info
+      # 配置SSH连接到Ubuntu服务器
+      - name: Configure SSH
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
+
+      # 1. 将服务器的host key添加到known_hosts（避免第一次连接时的确认）
+      - name: Add Known Hosts
         run: |
-          echo "Branch: ${{ github.ref_name }}"
+          mkdir -p ~/.ssh
+          ssh-keyscan -H 39.96.223.65 >> ~/.ssh/known_hosts
+
+      # 2. SSH登录到服务器并执行部署脚本
+      - name: Deploy to Server
+        run: |
+          ssh root@39.96.223.65 << 'ENDSSH'
+            # 1. 登录到GitHub Container Registry
+            echo "${{ secrets.GHCR_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+            
+            # 2. 拉取最新镜像
+            docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+            
+            # 3. 停止并删除旧容器
+            docker stop rust-ci-demo || true
+            docker rm rust-ci-demo || true
+            
+            # 4. 启动新容器
+            docker run -d \
+              --name rust-ci-demo \
+              --restart always \
+              -p 8080:8080 \
+              ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+            
+            # 5. 清理旧镜像
+            docker image prune -af
+          ENDSSH
+
+      # 输出部署成功通知
+      - name: Deploy Success Notification
+        run: |
+          echo "::notice title=Deployment Successful::"
+          echo "Application deployed to: http://39.96.223.65:8080"
           echo "Run ID: ${{ github.run_id }}"
