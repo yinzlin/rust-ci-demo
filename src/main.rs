@@ -1,5 +1,5 @@
 fn main() {
-    println!("Hello CI/CD89!");
+    println!("Hello CI/CD89fasdf!");
 }
 
 #[cfg(test)]
