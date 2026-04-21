@@ -117,3 +117,30 @@ jobs:
       # 完整的release构建
       - name: Build release
         run: cargo build --release --workspace --all-features
+
+  # ------------------------------------------
+  # 作业5: 前端构建检查（Dioxus Web）
+  # 目的: 验证前端能够成功构建为WebAssembly
+  # 符合规则7: Dioxus用trunk构建
+  # ------------------------------------------
+  frontend-build:
+    name: Frontend Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - name: Install Trunk
+        run: cargo install trunk
+      - name: Install WASM target
+        run: rustup target add wasm32-unknown-unknown
+      - name: Install binaryen
+        run: |
+          wget -q https://github.com/WebAssembly/binaryen/releases/download/version_115/binaries-ubuntu-x86_64.tar.gz
+          tar -xzf binaries-ubuntu-x86_64.tar.gz
+          sudo cp binaries-ubuntu-x86_64/* /usr/local/bin/
+          rm -rf binaries-ubuntu-x86_64*
+      - name: Build frontend
+        working-directory: ./crates/frontend
+        run: trunk build --release

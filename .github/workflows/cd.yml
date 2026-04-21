@@ -1,7 +1,7 @@
 # ============================================
 # 持续部署 (CD) 工作流
 # 触发条件: CI工作流成功完成后自动触发
-# 流程: Docker镜像构建 → 推送到仓库 → 生产环境部署通知
+# 流程: 前端构建 → 后端构建 → Docker镜像构建 → 部署
 # ============================================
 name: CD
 
@@ -29,34 +29,93 @@ env:
 
 # ============================================
 # 作业定义
-# build-and-push → deploy (串行执行)
+# build-frontend → build-backend → build-and-push → deploy (串行执行)
 # ============================================
 jobs:
   # ------------------------------------------
-  # 作业1: 构建并推送Docker镜像
+  # 作业1: 构建前端（Dioxus Web）
+  # 目的: 使用Trunk构建前端为WebAssembly
+  # 符合规则7: Dioxus用trunk构建
+  # ------------------------------------------
+  build-frontend:
+    name: Build Frontend
+    runs-on: ubuntu-latest
+    # 仅当CI成功时才执行
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - name: Install Trunk
+        run: cargo install trunk
+      - name: Install WASM target
+        run: rustup target add wasm32-unknown-unknown
+      - name: Install binaryen
+        run: |
+          wget -q https://github.com/WebAssembly/binaryen/releases/download/version_115/binaries-ubuntu-x86_64.tar.gz
+          tar -xzf binaries-ubuntu-x86_64.tar.gz
+          sudo cp binaries-ubuntu-x86_64/* /usr/local/bin/
+          rm -rf binaries-ubuntu-x86_64*
+      - name: Build frontend
+        working-directory: ./crates/frontend
+        run: trunk build --release
+      - name: Upload dist artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: crates/frontend/dist
+
+  # ------------------------------------------
+  # 作业2: 构建后端（Axum）
+  # 目的: 构建后端为可执行文件
+  # 符合规则7: 后端release构建
+  # ------------------------------------------
+  build-backend:
+    name: Build Backend
+    runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build backend
+        run: cargo build --release -p backend
+      - name: Upload backend artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend
+          path: target/release/app
+
+  # ------------------------------------------
+  # 作业3: 构建并推送Docker镜像
   # 目的: 将代码打包成Docker镜像并推送到容器仓库
-  # 前置条件: CI工作流必须成功完成
+  # 前置条件: 前端和后端构建完成
   # 符合规则7: Docker+Nginx部署
   # ------------------------------------------
   build-and-push:
     name: Build and Push Docker Image
     runs-on: ubuntu-latest
-    # 仅当CI成功时才执行，失败则跳过
+    needs: [build-frontend, build-backend]
     if: ${{ github.event.workflow_run.conclusion == 'success' }}
-    # 权限配置: packages.write允许推送镜像到GitHub Container Registry
     permissions:
       contents: read
       packages: write
     steps:
-      # 检出代码
       - uses: actions/checkout@v4
+      - name: Download frontend artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
+      - name: Download backend artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: backend
+          path: .
 
-      # 配置Docker Buildx，支持多平台构建和高级构建选项
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      # 登录容器仓库
-      # 使用GITHUB_TOKEN进行认证，push镜像时自动使用该凭证
       - name: Log in to Container Registry
         uses: docker/login-action@v3
         with:
@@ -64,12 +123,6 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # 提取镜像元数据，生成版本标签
-      # 支持的标签策略:
-      # - branch: 根据分支名生成标签
-      # - sha: 根据commit SHA生成唯一标签
-      # - semver: 识别语义化版本标签 (v1.2.3)
-      # - latest: main分支自动添加latest标签
       - name: Extract metadata
         id: meta
         uses: docker/metadata-action@v5
@@ -79,26 +132,23 @@ jobs:
             type=ref,event=branch
             type=sha,event=branch
             type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
             type=raw,value=latest,enable={{is_default_branch}}
 
-      # 构建并推送镜像
-      # - context: . 表示构建上下文为当前目录
-      # - push: true 构建成功后自动推送到仓库
-      # - cache-from/cache-to: 使用GitHub Actions缓存加速构建
-      - name: Build and push
+      - name: Build Docker image
         uses: docker/build-push-action@v6
         with:
           context: .
-          push: true
+          push: false
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          # 使用GitHub Actions缓存加速后续构建
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      - name: Push Docker image
+        run: docker push ${{ steps.meta.outputs.tags }}
+
   # ------------------------------------------
-  # 作业2: 部署到Ubuntu服务器
+  # 作业4: 部署到Ubuntu服务器
   # 目的: 自动化部署到远程服务器 39.96.223.65
   # 说明: 使用SSH连接服务器，拉取新镜像并重启容器
   # 符合规则7: Docker+Nginx部署
@@ -106,51 +156,40 @@ jobs:
   deploy:
     name: Deploy to Ubuntu Server
     runs-on: ubuntu-latest
-    # 依赖build-and-push作业，必须镜像构建完成才能部署
     needs: build-and-push
     if: ${{ github.event.workflow_run.conclusion == 'success' }}
     steps:
-      # 检出代码（获取部署脚本）
       - uses: actions/checkout@v4
 
-      # 配置SSH连接到Ubuntu服务器
       - name: Configure SSH
         uses: webfactory/ssh-agent@v0.9.0
         with:
           ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
 
-      # 1. 将服务器的host key添加到known_hosts（避免第一次连接时的确认）
       - name: Add Known Hosts
         run: |
           mkdir -p ~/.ssh
           ssh-keyscan -H 39.96.223.65 >> ~/.ssh/known_hosts
 
-      # 2. SSH登录到服务器并执行部署脚本
       - name: Deploy to Server
         run: |
           ssh root@39.96.223.65 << 'ENDSSH'
-            # 1. 登录到GitHub Container Registry
             echo "${{ secrets.GHCR_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
             
-            # 2. 拉取最新镜像
             docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
             
-            # 3. 停止并删除旧容器
             docker stop rust-ci-demo || true
             docker rm rust-ci-demo || true
             
-            # 4. 启动新容器
             docker run -d \
               --name rust-ci-demo \
               --restart always \
               -p 8080:8080 \
               ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
             
-            # 5. 清理旧镜像
             docker image prune -af
           ENDSSH
 
-      # 输出部署成功通知
       - name: Deploy Success Notification
         run: |
           echo "::notice title=Deployment Successful::"

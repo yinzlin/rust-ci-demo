@@ -1,0 +1,27 @@
+[application]
+name = "rust-ci-demo"
+toolchain = "stable"
+
+[web.app]
+title = "Rust CI/CD Demo"
+base_path = "/"
+
+[web.watcher]
+watch_path = ["src"]
+reload_port = 3001
+
+[web.resource]
+style = []
+script = []
+
+[build]
+target = "web"
+dist = "../dist"
+release = true
+
+[build.target]
+webdefault = "deny"
+
+[build.release]
+compress = true
+minify = true
