@@ -14,7 +14,7 @@ pub fn create_app() -> Router {
 }
 
 pub async fn run_server() {
-    let addr = SocketAddr::from(([0, 0, 0, 0], 8080)); // 改为8081端口
+    let addr = SocketAddr::from(([0, 0, 0, 0], 8081)); // 改为8081端口
     let listener = tokio::net::TcpListener::bind(addr)
         .await
         .expect("Failed to bind port");
