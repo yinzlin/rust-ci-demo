@@ -1,5 +1,5 @@
 fn main() {
-    println!("Hello CI/CD!");
+    println!("Hello CI/CD-demo!");
 }
 
 #[cfg(test)]
